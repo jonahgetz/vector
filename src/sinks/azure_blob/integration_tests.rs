@@ -34,6 +34,8 @@ async fn azure_blob_healthcheck_passed() {
     let client = azure_common::config::build_client(
         None,
         config.connection_string.clone().into(),
+        config.storage_account.clone().into(),
+        config.endpoint.clone().into(),
         config.container_name.clone(),
         &crate::config::ProxyConfig::default(),
         None,
@@ -56,6 +58,8 @@ async fn azure_blob_healthcheck_unknown_container() {
     let client = azure_common::config::build_client(
         None,
         config.connection_string.clone().into(),
+        config.storage_account.clone().into(),
+        config.endpoint.clone().into(),
         config.container_name.clone(),
         &crate::config::ProxyConfig::default(),
         None,
@@ -296,6 +300,8 @@ impl AzureBlobSinkConfig {
         let client = azure_common::config::build_client(
             None,
             self.connection_string.clone().into(),
+            config.storage_account.clone().into(),
+            config.endpoint.clone().into(),
             self.container_name.clone(),
             &crate::config::ProxyConfig::default(),
             None,
@@ -316,6 +322,8 @@ impl AzureBlobSinkConfig {
         let client = azure_common::config::build_client(
             None,
             self.connection_string.clone().into(),
+            config.storage_account.clone().into(),
+            config.endpoint.clone().into(),
             self.container_name.clone(),
             &crate::config::ProxyConfig::default(),
             None,
@@ -343,6 +351,8 @@ impl AzureBlobSinkConfig {
         let client = azure_common::config::build_client(
             None,
             self.connection_string.clone().into(),
+            config.storage_account.clone().into(),
+            config.endpoint.clone().into(),
             self.container_name.clone(),
             &crate::config::ProxyConfig::default(),
             None,
@@ -406,6 +416,8 @@ impl AzureBlobSinkConfig {
         let client = azure_common::config::build_client(
             None,
             self.connection_string.clone().into(),
+            config.storage_account.clone().into(),
+            config.endpoint.clone().into(),
             self.container_name.clone(),
             &crate::config::ProxyConfig::default(),
             None,

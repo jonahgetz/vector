@@ -67,7 +67,19 @@ pub struct AzureBlobSinkConfig {
     #[configurable(metadata(
         docs::examples = "BlobEndpoint=https://mylogstorage.blob.core.windows.net/;SharedAccessSignature=generatedsastoken"
     ))]
-    pub connection_string: SensitiveString,
+    pub connection_string: Option<SensitiveString>,
+
+    /// The Azure Blob Storage Account
+    #[configurable(metadata(
+        docs::examples = "mylogstorage"
+    ))]
+    pub storage_account: Option<String>,
+
+    /// The Azure Blob endpoint
+    #[configurable(metadata(
+        docs::examples = "https://mylogstorage.blob.core.windows.net"
+    ))]
+    pub endpoint: Option<String>,
 
     /// The Azure Blob Storage Account container name.
     #[configurable(metadata(docs::examples = "my-logs"))]
@@ -158,7 +170,9 @@ impl GenerateConfig for AzureBlobSinkConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
             auth: None,
-            connection_string: String::from("DefaultEndpointsProtocol=https;AccountName=some-account-name;AccountKey=some-account-key;").into(),
+            connection_string: Some(String::from("DefaultEndpointsProtocol=https;AccountName=some-account-name;AccountKey=some-account-key;").into()),
+            storage_account: None,
+            endpoint: None,
             container_name: String::from("logs"),
             blob_prefix: default_blob_prefix(),
             blob_time_format: Some(String::from("%s")),
@@ -180,7 +194,9 @@ impl SinkConfig for AzureBlobSinkConfig {
     async fn build(&self, cx: SinkContext) -> Result<(VectorSink, Healthcheck)> {
         let client = azure_common::config::build_client(
             self.auth.clone(),
-            self.connection_string.clone().into(),
+            self.connection_string.clone().map(Into::into),
+            self.storage_account.clone().map(Into::into),
+            self.endpoint.clone().map(Into::into),
             self.container_name.clone(),
             cx.proxy(),
             self.tls.clone(),

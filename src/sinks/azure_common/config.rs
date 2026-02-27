@@ -329,25 +329,45 @@ pub fn build_healthcheck(
 
 pub fn build_client(
     auth: Option<AzureAuthentication>,
-    connection_string: String,
+    connection_string: Option<String>,
+    storage_account: Option<String>,
+    endpoint: Option<String>,
     container_name: String,
     proxy: &crate::config::ProxyConfig,
     tls: Option<TlsConfig>,
 ) -> crate::Result<Arc<BlobContainerClient>> {
-    // Parse connection string without legacy SDK
-    let parsed = ParsedConnectionString::parse(&connection_string)
-        .map_err(|e| format!("Invalid connection string: {e}"))?;
-    // Compose container URL (SAS appended if present)
-    let container_url = parsed
-        .container_url(&container_name)
-        .map_err(|e| format!("Failed to build container URL: {e}"))?;
+    let (container_url, parsed_auth) = match (connection_string, storage_account) {
+        (Some(connection_string), None) => {
+            // Parse connection string without legacy SDK
+            let parsed = ParsedConnectionString::parse(&connection_string)
+                .map_err(|e| format!("Invalid connection string: {e}"))?;
+            // Compose container URL (SAS appended if present)
+            let container_url = parsed
+                .container_url(&container_name)
+                .map_err(|e| format!("Failed to build container URL: {e}"))?;
+            (container_url, parsed.auth())
+        }
+        (None, Some(storage_account)) => {
+            let base_url = endpoint.unwrap_or_else(||
+                format!("https://{}.blob.core.windows.net", storage_account)
+            );
+            let container_url = format!("{}/{}", base_url.trim_end_matches('/'), container_name);
+            (container_url, Auth::None)
+        }
+        (Some(_), Some(_)) => {
+            return Err("can only set one of connection_string or storage_account".into());
+        }
+        (None, None) => {
+            return Err("must set either connection_string or storage_account".into());
+        }
+    };
     let url = Url::parse(&container_url).map_err(|e| format!("Invalid container URL: {e}"))?;
 
     let mut credential: Option<Arc<dyn TokenCredential>> = None;
 
     // Prepare options; attach Shared Key policy if needed
     let mut options = BlobContainerClientOptions::default();
-    match (parsed.auth(), &auth) {
+    match (parsed_auth, &auth) {
         (Auth::None, None) => {
             warn!("No authentication method provided, requests will be anonymous");
         }
@@ -405,7 +425,7 @@ pub fn build_client(
                 "Cannot use both Shared Key and another Azure Authentication method at the same time"
             );
         }
-    }
+    };
 
     // Use reqwest v0.12 since Azure SDK only implements HttpClient for reqwest::Client v0.12
     let mut reqwest_builder = reqwest_12::ClientBuilder::new();
