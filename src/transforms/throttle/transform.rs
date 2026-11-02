@@ -99,9 +99,28 @@ where
         .map(|quota| quota.allow_burst(threshold))
     }
 
-    pub fn emit_event_discarded(&self, key: String) {
+    pub fn emit_event_discarded(&self, event: &Event, key: String) {
+        let metric_key = self
+            .internal_metrics
+            .key_field
+            .as_ref()
+            .filter(|_| {
+                self.internal_metrics.emit_events_discarded_per_key
+                    || self.internal_metrics.include_group_tag
+            })
+            .map(|template| {
+                template.render_string(event).unwrap_or_else(|error| {
+                    emit!(TemplateRenderingError {
+                        error,
+                        field: Some("internal_metrics.key_field"),
+                        drop_event: false,
+                    });
+                    "None".to_owned()
+                })
+            });
         emit!(ThrottleEventDiscarded {
             key,
+            metric_key,
             emit_events_discarded_per_key: self.internal_metrics.emit_events_discarded_per_key,
             include_group_tag: self.internal_metrics.include_group_tag,
         });
@@ -148,7 +167,7 @@ where
                     if limiter.check_key(&key, quota) {
                         Some(event)
                     } else {
-                        self.emit_event_discarded(key.unwrap_or_else(|| "None".to_string()));
+                        self.emit_event_discarded(&event, key.unwrap_or_else(|| "None".to_string()));
                         None
                     }
                 } else {
@@ -176,11 +195,12 @@ mod tests {
     use indoc::indoc;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
+    use vector_lib::metrics::Controller;
     use vrl::event_path;
 
     use super::*;
     use crate::{
-        event::LogEvent,
+        event::{LogEvent, MetricValue},
         test_util::components::assert_transform_compliance,
         transforms::{Transform, test::create_topology},
     };
@@ -199,6 +219,132 @@ mod tests {
             )))
             .collect()
             .await
+    }
+
+    #[tokio::test]
+    async fn metric_key_preserves_pod_buckets_and_combines_service_drops() {
+        for (per_key, group_tag) in [(true, false), (false, true), (true, true)] {
+            vector_lib::metrics::init_test();
+            let controller = Controller::get().unwrap();
+            controller.reset();
+            let mut config: ThrottleConfig = serde_yaml::from_str(indoc! {"
+                threshold: 1
+                window_secs: 60
+                key_field: '{{ pod }}'
+                internal_metrics:
+                  key_field: '{{ service }}'
+            "})
+            .unwrap();
+            config.internal_metrics.emit_events_discarded_per_key = per_key;
+            config.internal_metrics.include_group_tag = group_tag;
+            let logs = [
+                ("pod-a", Some("service-a")),
+                ("pod-a", Some("service-a")),
+                ("pod-b", Some("service-a")),
+                ("pod-b", Some("service-a")),
+                ("pod-a", Some("service-b")),
+                ("pod-c", None),
+                ("pod-c", None),
+            ]
+            .into_iter()
+            .map(|(pod, service)| {
+                let mut log = LogEvent::from("hello");
+                log.insert(event_path!("pod"), pod);
+                if let Some(service) = service {
+                    log.insert(event_path!("service"), service);
+                }
+                log
+            })
+            .collect();
+            assert_eq!(throttle_logs(&config, logs).await.len(), 3);
+            let mut drops = BTreeMap::new();
+            let mut groups = BTreeMap::new();
+            let mut total = 0.0;
+            for metric in controller.capture_metrics() {
+                if let MetricValue::Counter { value } = metric.value() {
+                    match metric.name() {
+                        "events_discarded_total" => {
+                            drops.insert(metric.tag_value("key").unwrap(), *value);
+                        }
+                        "component_discarded_events_total" => {
+                            total += value;
+                            if let Some(group) = metric.tag_value("group") {
+                                groups.insert(group, *value);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let expected = BTreeMap::from([
+                ("None".to_owned(), 1.0),
+                ("service-a".to_owned(), 2.0),
+                ("service-b".to_owned(), 1.0),
+            ]);
+            assert_eq!(
+                drops,
+                if per_key {
+                    expected.clone()
+                } else {
+                    BTreeMap::new()
+                }
+            );
+            assert_eq!(groups, if group_tag { expected } else { BTreeMap::new() });
+            assert_eq!(total, 4.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn metric_key_defaults_to_bucket_and_respects_disabled_metrics() {
+        for (per_key, group_tag) in [(true, false), (false, true), (true, true), (false, false)] {
+            vector_lib::metrics::init_test();
+            let controller = Controller::get().unwrap();
+            controller.reset();
+            let config = ThrottleConfig {
+                threshold: 1,
+                window_secs: Duration::from_mins(1),
+                key_field: Some(UnconfinedTemplate::try_from("{{ pod }}").unwrap()),
+                internal_metrics: ThrottleInternalMetricsConfig {
+                    emit_events_discarded_per_key: per_key,
+                    include_group_tag: group_tag,
+                    key_field: if per_key || group_tag {
+                        None
+                    } else {
+                        Some(UnconfinedTemplate::try_from("{{ missing }}").unwrap())
+                    },
+                },
+                ..Default::default()
+            };
+            let mut log = LogEvent::from("hello");
+            log.insert(event_path!("pod"), "pod-a");
+            assert_eq!(throttle_logs(&config, vec![log; 2]).await.len(), 1);
+            let counters: BTreeMap<_, _> = controller
+                .capture_metrics()
+                .into_iter()
+                .filter_map(|metric| {
+                    if let MetricValue::Counter { value } = metric.value() {
+                        if metric.name() == "events_discarded_total" {
+                            assert_eq!(metric.tag_value("key").as_deref(), Some("pod-a"));
+                        }
+                        if metric.name() == "component_discarded_events_total" {
+                            assert_eq!(
+                                metric.tag_value("group").as_deref(),
+                                group_tag.then_some("pod-a")
+                            );
+                        }
+                        Some((metric.name().to_owned(), *value))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                counters.get("events_discarded_total"),
+                per_key.then_some(&1.0)
+            );
+            assert_eq!(counters.get("component_discarded_events_total"), Some(&1.0));
+            assert!(!counters.contains_key("component_errors_total"));
+        }
     }
 
     #[tokio::test]
