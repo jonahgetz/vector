@@ -109,6 +109,19 @@ components: transforms: throttle: {
 						"""
 				},
 				{
+					title: "Dynamic thresholds"
+					body: """
+						Set `threshold_field` to an event field path to override `threshold` for each event.
+						For example, `threshold_field: rate_limit` uses an event's `rate_limit` value.
+						Combine it with `key_field: \"{{ service }}\"` to apply different limits to each service.
+
+						Events in the same bucket share capacity, even when their thresholds differ. Each accepted
+						event consumes `1 / threshold` of the bucket's capacity, which replenishes over `window_secs`.
+						Changing the threshold does not reset the bucket. Missing or invalid field values use the
+						configured `threshold` and share the same capacity.
+						"""
+				},
+				{
 					title: "Rate Limited Events"
 					body: """
 						The rate limiter will allow up to `threshold` number of events through and drop any further events

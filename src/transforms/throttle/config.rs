@@ -53,6 +53,15 @@ pub struct ThrottleConfig {
     /// Each unique key has its own `threshold`.
     pub threshold: u32,
 
+    /// The event field whose value overrides `threshold` on a per-event basis.
+    ///
+    /// Accepts a positive integer, or a string that parses as one, up to 4294967295.
+    /// Floating point values are rejected. If the field is missing or invalid, `threshold`
+    /// is used as a fallback. Events in the same `key_field` bucket share usage even when
+    /// their thresholds differ.
+    #[configurable(metadata(docs::examples = "rate_limit"))]
+    pub threshold_field: Option<String>,
+
     /// The time window in which the configured `threshold` is applied, in seconds.
     #[serde_as(as = "serde_with::DurationSecondsWithFrac<f64>")]
     #[configurable(metadata(docs::human_name = "Time Window"))]

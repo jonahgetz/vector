@@ -63,6 +63,18 @@ generated: components: transforms: throttle: configuration: {
 		required: true
 		type: uint: {}
 	}
+	threshold_field: {
+		description: """
+			The event field whose value overrides `threshold` on a per-event basis.
+
+			Accepts a positive integer, or a string that parses as one, up to 4294967295.
+			Floating point values are rejected. If the field is missing or invalid, `threshold`
+			is used as a fallback. Events in the same `key_field` bucket share usage even when
+			their thresholds differ.
+			"""
+		required: false
+		type: string: examples: ["rate_limit"]
+	}
 	window_secs: {
 		description: "The time window in which the configured `threshold` is applied, in seconds."
 		required:    true
