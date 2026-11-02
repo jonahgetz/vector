@@ -308,6 +308,19 @@ generated: components: sources: kubernetes_logs: configuration: {
 		description: "Configuration for how the events are enriched with Pod metadata."
 		required:    false
 		type: object: options: {
+			container_cpu_request_millicores: {
+				description: """
+					Event field for the logging container's CPU request, in millicores.
+
+					Fractional millicores are rounded up. Omitted if the request is missing or cannot be
+					represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+					"""
+				required: false
+				type: string: {
+					default: ".kubernetes.container_cpu_request_millicores"
+					examples: [".k8s.container_cpu_request_millicores", "k8s.container_cpu_request_millicores", ""]
+				}
+			}
 			container_id: {
 				description: """
 					Event field for the Container's ID.
@@ -342,6 +355,19 @@ generated: components: sources: kubernetes_logs: configuration: {
 				type: string: {
 					default: ".kubernetes.container_image_id"
 					examples: [".k8s.container_image_id", "k8s.container_image_id", ""]
+				}
+			}
+			container_memory_request_bytes: {
+				description: """
+					Event field for the logging container's memory request, in bytes.
+
+					Fractional bytes are rounded up. Omitted if the request is missing or cannot be
+					represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+					"""
+				required: false
+				type: string: {
+					default: ".kubernetes.container_memory_request_bytes"
+					examples: [".k8s.container_memory_request_bytes", "k8s.container_memory_request_bytes", ""]
 				}
 			}
 			container_name: {

@@ -101,6 +101,16 @@ components: sources: kubernetes_logs: {
 					examples: ["coredns"]
 				}
 			}
+			"kubernetes.container_cpu_request_millicores": {
+				description: "CPU request of the container producing the log, in millicores. Fractional millicores are rounded up. Omitted if the request is missing, invalid, or exceeds a signed 64-bit integer."
+				required:    false
+				type: uint: examples: [500, 1000]
+			}
+			"kubernetes.container_memory_request_bytes": {
+				description: "Memory request of the container producing the log, in bytes. Fractional bytes are rounded up. Omitted if the request is missing, invalid, or exceeds a signed 64-bit integer."
+				required:    false
+				type: uint: examples: [268435456, 1073741824]
+			}
 			"kubernetes.namespace_labels": {
 				description: "Set of labels attached to the Namespace."
 				required:    false

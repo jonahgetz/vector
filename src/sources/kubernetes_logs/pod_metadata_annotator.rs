@@ -20,6 +20,7 @@ use vector_lib::{
 use super::{
     Config,
     path_helpers::{LogFileInfo, parse_log_file_path},
+    resource_quantity::parse_quantity,
 };
 use crate::event::{Event, LogEvent};
 
@@ -108,6 +109,24 @@ pub struct FieldsSpec {
     #[configurable(metadata(docs::examples = ""))]
     pub container_name: OptionalTargetPath,
 
+    /// Event field for the logging container's CPU request, in millicores.
+    ///
+    /// Fractional millicores are rounded up. Omitted if the request is missing or cannot be
+    /// represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+    #[configurable(metadata(docs::examples = ".k8s.container_cpu_request_millicores"))]
+    #[configurable(metadata(docs::examples = "k8s.container_cpu_request_millicores"))]
+    #[configurable(metadata(docs::examples = ""))]
+    pub container_cpu_request_millicores: OptionalTargetPath,
+
+    /// Event field for the logging container's memory request, in bytes.
+    ///
+    /// Fractional bytes are rounded up. Omitted if the request is missing or cannot be
+    /// represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+    #[configurable(metadata(docs::examples = ".k8s.container_memory_request_bytes"))]
+    #[configurable(metadata(docs::examples = "k8s.container_memory_request_bytes"))]
+    #[configurable(metadata(docs::examples = ""))]
+    pub container_memory_request_bytes: OptionalTargetPath,
+
     /// Event field for the Container's ID.
     ///
     /// Set to `""` to suppress this key.
@@ -159,6 +178,16 @@ impl Default for FieldsSpec {
             .into(),
             container_id: OwnedTargetPath::event(owned_value_path!("kubernetes", "container_id"))
                 .into(),
+            container_cpu_request_millicores: OwnedTargetPath::event(owned_value_path!(
+                "kubernetes",
+                "container_cpu_request_millicores"
+            ))
+            .into(),
+            container_memory_request_bytes: OwnedTargetPath::event(owned_value_path!(
+                "kubernetes",
+                "container_memory_request_bytes"
+            ))
+            .into(),
             container_image: OwnedTargetPath::event(owned_value_path!(
                 "kubernetes",
                 "container_image"
@@ -231,6 +260,7 @@ impl PodMetadataAnnotator {
             container = pod_spec
                 .containers
                 .iter()
+                .chain(pod_spec.init_containers.iter().flatten())
                 .find(|c| c.name == file_info.container_name);
             if let Some(container) = container {
                 annotate_from_container(log, &self.fields_spec, container, self.log_namespace);
@@ -523,6 +553,45 @@ fn annotate_from_container(
     container: &Container,
     log_namespace: LogNamespace,
 ) {
+    if let Some(requests) = container
+        .resources
+        .as_ref()
+        .and_then(|resources| resources.requests.as_ref())
+    {
+        for (resource, scale, field_name, field) in [
+            (
+                "cpu",
+                3,
+                "container_cpu_request_millicores",
+                &fields_spec.container_cpu_request_millicores,
+            ),
+            (
+                "memory",
+                0,
+                "container_memory_request_bytes",
+                &fields_spec.container_memory_request_bytes,
+            ),
+        ] {
+            if let Some(value) = requests
+                .get(resource)
+                .and_then(|quantity| parse_quantity(&quantity.0, scale))
+            {
+                let legacy_key = field
+                    .path
+                    .as_ref()
+                    .map(|key| &key.path)
+                    .map(LegacyKey::Overwrite);
+                log_namespace.insert_source_metadata(
+                    Config::NAME,
+                    log,
+                    legacy_key,
+                    path!(field_name),
+                    value,
+                );
+            }
+        }
+    }
+
     if let Some(value) = &container.image {
         let legacy_key = fields_spec
             .container_image
@@ -546,10 +615,208 @@ mod tests {
     use std::path::PathBuf;
 
     use k8s_openapi::api::core::v1::PodIP;
+    use kube::runtime::{reflector::store::Writer, watcher};
+    use serde_json::json;
     use similar_asserts::assert_eq;
     use vector_lib::lookup::{event_path, metadata_path};
 
     use super::*;
+    use crate::event::Value;
+
+    fn resource_path(namespace: LogNamespace, field: &str) -> OwnedTargetPath {
+        match namespace {
+            LogNamespace::Legacy => OwnedTargetPath::event(owned_value_path!("kubernetes", field)),
+            LogNamespace::Vector => {
+                OwnedTargetPath::metadata(owned_value_path!("kubernetes_logs", field))
+            }
+        }
+    }
+
+    fn pod_with_resource_requests() -> Pod {
+        serde_json::from_value(json!({
+            "metadata": {"name": "pod", "namespace": "namespace", "uid": "uid"},
+            "spec": {
+                "containers": [
+                    {
+                        "name": "app",
+                        "resources": {"requests": {"cpu": "500m", "memory": "256Mi"}}
+                    },
+                    {
+                        "name": "sidecar",
+                        "resources": {"requests": {"cpu": "100m", "memory": "32Mi"}}
+                    }
+                ],
+                "initContainers": [{
+                    "name": "init",
+                    "resources": {"requests": {"cpu": "1", "memory": "64Mi"}}
+                }]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn annotates_logging_container_resource_requests() {
+        let mut writer = Writer::default();
+        writer.apply_watcher_event(&watcher::Event::Apply(pod_with_resource_requests()));
+
+        for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
+            let annotator =
+                PodMetadataAnnotator::new(writer.as_reader(), FieldsSpec::default(), namespace);
+            for (container, cpu, memory) in [
+                ("app", Some(500), Some(268_435_456)),
+                ("sidecar", Some(100), Some(33_554_432)),
+                ("init", Some(1000), Some(67_108_864)),
+                ("unknown", None, None),
+            ] {
+                let mut event = Event::Log(LogEvent::default());
+                annotator
+                    .annotate(
+                        &mut event,
+                        &format!("/var/log/pods/namespace_pod_uid/{container}/0.log"),
+                    )
+                    .unwrap();
+                let log = event.as_log();
+                assert_eq!(
+                    log.get(&resource_path(
+                        namespace,
+                        "container_cpu_request_millicores"
+                    )),
+                    cpu.map(Value::from).as_ref(),
+                    "{container}: CPU",
+                );
+                assert_eq!(
+                    log.get(&resource_path(namespace, "container_memory_request_bytes")),
+                    memory.map(Value::from).as_ref(),
+                    "{container}: memory",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resource_requests_follow_pod_cache_updates() {
+        let mut writer = Writer::default();
+        let annotator = PodMetadataAnnotator::new(
+            writer.as_reader(),
+            FieldsSpec::default(),
+            LogNamespace::Legacy,
+        );
+        let file = "/var/log/pods/namespace_pod_uid/app/0.log";
+        let mut event = Event::Log(LogEvent::default());
+        annotator.annotate(&mut event, file).unwrap();
+        let cpu_path = resource_path(LogNamespace::Legacy, "container_cpu_request_millicores");
+        assert_eq!(event.as_log().get(&cpu_path), None);
+
+        let mut pod = pod_with_resource_requests();
+        writer.apply_watcher_event(&watcher::Event::Apply(pod.clone()));
+        let mut event = Event::Log(LogEvent::default());
+        annotator.annotate(&mut event, file).unwrap();
+        assert_eq!(event.as_log().get(&cpu_path), Some(&Value::from(500)));
+
+        pod.spec.as_mut().unwrap().containers[0]
+            .resources
+            .as_mut()
+            .unwrap()
+            .requests
+            .as_mut()
+            .unwrap()
+            .get_mut("cpu")
+            .unwrap()
+            .0 = "2".to_owned();
+        writer.apply_watcher_event(&watcher::Event::Apply(pod));
+        let mut event = Event::Log(LogEvent::default());
+        annotator.annotate(&mut event, file).unwrap();
+        assert_eq!(event.as_log().get(&cpu_path), Some(&Value::from(2000)));
+    }
+
+    #[test]
+    fn resource_requests_handle_missing_and_invalid_values() {
+        for (resources, cpu, memory) in [
+            (json!(null), None, None),
+            (json!({}), None, None),
+            (json!({"limits": {"cpu": "1", "memory": "1Gi"}}), None, None),
+            (json!({"requests": {"cpu": "250m"}}), Some(250), None),
+            (json!({"requests": {"memory": "1M"}}), None, Some(1_000_000)),
+            (
+                json!({"requests": {"cpu": "0", "memory": "0"}}),
+                Some(0),
+                Some(0),
+            ),
+            (
+                json!({"requests": {"cpu": "invalid", "memory": "1Mi"}}),
+                None,
+                Some(1_048_576),
+            ),
+            (
+                json!({"requests": {"cpu": "1", "memory": "8Ei"}}),
+                Some(1000),
+                None,
+            ),
+        ] {
+            let container: Container = serde_json::from_value(json!({
+                "name": "app",
+                "resources": resources,
+            }))
+            .unwrap();
+            for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
+                let mut log = LogEvent::default();
+                annotate_from_container(&mut log, &FieldsSpec::default(), &container, namespace);
+                assert_eq!(
+                    log.get(&resource_path(
+                        namespace,
+                        "container_cpu_request_millicores"
+                    )),
+                    cpu.map(Value::from).as_ref(),
+                );
+                assert_eq!(
+                    log.get(&resource_path(namespace, "container_memory_request_bytes")),
+                    memory.map(Value::from).as_ref(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resource_request_fields_can_be_renamed_or_disabled() {
+        let pod = pod_with_resource_requests();
+        let container = &pod.spec.as_ref().unwrap().containers[0];
+        for (cpu_field, memory_field) in [("cpu", "memory"), ("", "memory"), ("cpu", ""), ("", "")]
+        {
+            let fields: FieldsSpec = serde_json::from_value(json!({
+                "container_cpu_request_millicores": cpu_field,
+                "container_memory_request_bytes": memory_field,
+            }))
+            .unwrap();
+            let mut log = LogEvent::default();
+            annotate_from_container(&mut log, &fields, container, LogNamespace::Legacy);
+            let mut expected = LogEvent::default();
+            if !cpu_field.is_empty() {
+                expected.insert(event_path!("cpu"), 500);
+            }
+            if !memory_field.is_empty() {
+                expected.insert(event_path!("memory"), 268_435_456);
+            }
+            assert_eq!(log, expected);
+
+            let mut log = LogEvent::default();
+            annotate_from_container(&mut log, &fields, container, LogNamespace::Vector);
+            assert_eq!(
+                log.get(metadata_path!(
+                    "kubernetes_logs",
+                    "container_cpu_request_millicores"
+                )),
+                Some(&Value::from(500)),
+            );
+            assert_eq!(
+                log.get(metadata_path!(
+                    "kubernetes_logs",
+                    "container_memory_request_bytes"
+                )),
+                Some(&Value::from(268_435_456)),
+            );
+        }
+    }
 
     #[allow(
         clippy::too_many_lines,

@@ -71,6 +71,7 @@ mod parser;
 mod partial_events_merger;
 mod path_helpers;
 mod pod_metadata_annotator;
+mod resource_quantity;
 mod transform_utils;
 mod util;
 
@@ -423,6 +424,30 @@ impl SourceConfig for Config {
                     .map(LegacyKey::Overwrite),
                 &owned_value_path!("container_name"),
                 Kind::bytes().or_undefined(),
+                None,
+            )
+            .with_source_metadata(
+                Self::NAME,
+                self.pod_annotation_fields
+                    .container_cpu_request_millicores
+                    .path
+                    .clone()
+                    .map(|key| key.path)
+                    .map(LegacyKey::Overwrite),
+                &owned_value_path!("container_cpu_request_millicores"),
+                Kind::integer().or_undefined(),
+                None,
+            )
+            .with_source_metadata(
+                Self::NAME,
+                self.pod_annotation_fields
+                    .container_memory_request_bytes
+                    .path
+                    .clone()
+                    .map(|key| key.path)
+                    .map(LegacyKey::Overwrite),
+                &owned_value_path!("container_memory_request_bytes"),
+                Kind::integer().or_undefined(),
                 None,
             )
             .with_source_metadata(
@@ -1595,6 +1620,16 @@ mod tests {
                         None
                     )
                     .with_metadata_field(
+                        &owned_value_path!("kubernetes_logs", "container_cpu_request_millicores"),
+                        Kind::integer().or_undefined(),
+                        None
+                    )
+                    .with_metadata_field(
+                        &owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
+                        Kind::integer().or_undefined(),
+                        None
+                    )
+                    .with_metadata_field(
                         &owned_value_path!("kubernetes_logs", "namespace_labels"),
                         Kind::object(Collection::empty().with_unknown(Kind::bytes()))
                             .or_undefined(),
@@ -1727,6 +1762,16 @@ mod tests {
                 .with_event_field(
                     &owned_value_path!("kubernetes", "container_name"),
                     Kind::bytes().or_undefined(),
+                    None
+                )
+                .with_event_field(
+                    &owned_value_path!("kubernetes", "container_cpu_request_millicores"),
+                    Kind::integer().or_undefined(),
+                    None
+                )
+                .with_event_field(
+                    &owned_value_path!("kubernetes", "container_memory_request_bytes"),
+                    Kind::integer().or_undefined(),
                     None
                 )
                 .with_event_field(
