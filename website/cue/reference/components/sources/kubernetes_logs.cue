@@ -102,12 +102,12 @@ components: sources: kubernetes_logs: {
 				}
 			}
 			"kubernetes.container_cpu_request_millicores": {
-				description: "CPU request of the container producing the log, in millicores. Disabled by default in legacy mode; enable with a nonempty `pod_annotation_fields.container_cpu_request_millicores` path. Vector mode always uses `%kubernetes_logs.container_cpu_request_millicores`, regardless of this setting. Fractional millicores are rounded up. Omitted if the request is missing, invalid, or exceeds a signed 64-bit integer."
+				description: "CPU request of the container producing the log, in millicores. Fractional millicores are rounded up. Omitted if the request is missing or cannot be represented as a non-negative 64-bit integer."
 				required:    false
 				type: uint: examples: [500, 1000]
 			}
 			"kubernetes.container_memory_request_bytes": {
-				description: "Memory request of the container producing the log, in bytes. Disabled by default in legacy mode; enable with a nonempty `pod_annotation_fields.container_memory_request_bytes` path. Vector mode always uses `%kubernetes_logs.container_memory_request_bytes`, regardless of this setting. Fractional bytes are rounded up. Omitted if the request is missing, invalid, or exceeds a signed 64-bit integer."
+				description: "Memory request of the container producing the log, in bytes. Fractional bytes are rounded up. Omitted if the request is missing or cannot be represented as a non-negative 64-bit integer."
 				required:    false
 				type: uint: examples: [268435456, 1073741824]
 			}
@@ -274,20 +274,13 @@ components: sources: kubernetes_logs: {
 					list of fields can be found in the
 					[`kubernetes_logs` source output docs](\(urls.vector_kubernetes_logs_source)#output-types).
 
-					Container CPU and memory requests are disabled by default. Enable either field
-					independently by setting its path in the source configuration:
+					Configure container CPU and memory request fields with `pod_annotation_fields`:
 
 					```yaml
 					pod_annotation_fields:
 					  container_cpu_request_millicores: kubernetes.container_cpu_request_millicores
 					  container_memory_request_bytes: kubernetes.container_memory_request_bytes
 					```
-
-					An omitted or empty path disables that field in both log namespaces. In the
-					legacy log namespace, the value is written to the configured event path. In the
-					Vector log namespace, a nonempty path enables enrichment without renaming the
-					fixed `%kubernetes_logs.container_cpu_request_millicores` or
-					`%kubernetes_logs.container_memory_request_bytes` metadata field.
 
 					Requests come from the logging container, including init containers, in the
 					cached Pod metadata. Fractional millicores and bytes are rounded up. Missing
