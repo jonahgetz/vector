@@ -7,6 +7,7 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::ObjectMeta,
 };
 use kube::runtime::reflector::{ObjectRef, store::Store};
+use kube_quantity::ParsedQuantity;
 use vector_lib::{
     config::{LegacyKey, LogNamespace},
     configurable::configurable_component,
@@ -20,7 +21,6 @@ use vector_lib::{
 use super::{
     Config,
     path_helpers::{LogFileInfo, parse_log_file_path},
-    resource_quantity::parse_quantity,
 };
 use crate::event::{Event, LogEvent};
 
@@ -549,6 +549,7 @@ fn annotate_from_container_status(
     );
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn annotate_from_container(
     log: &mut LogEvent,
     fields_spec: &FieldsSpec,
@@ -560,16 +561,16 @@ fn annotate_from_container(
         .as_ref()
         .and_then(|resources| resources.requests.as_ref())
     {
-        for (resource, scale, field_name, field) in [
+        for (resource, multiplier, field_name, field) in [
             (
                 "cpu",
-                3,
+                1000.0,
                 "container_cpu_request_millicores",
                 &fields_spec.container_cpu_request_millicores,
             ),
             (
                 "memory",
-                0,
+                1.0,
                 "container_memory_request_bytes",
                 &fields_spec.container_memory_request_bytes,
             ),
@@ -579,7 +580,11 @@ fn annotate_from_container(
             };
             if let Some(value) = requests
                 .get(resource)
-                .and_then(|quantity| parse_quantity(&quantity.0, scale))
+                .and_then(|quantity| ParsedQuantity::try_from(quantity).ok())
+                .and_then(|quantity| quantity.to_bytes_f64())
+                .map(|value| value * multiplier)
+                .filter(|value| (0.0..i64::MAX as f64).contains(value))
+                .map(|value| value.ceil() as i64)
             {
                 log_namespace.insert_source_metadata(
                     Config::NAME,
@@ -739,12 +744,27 @@ mod tests {
     }
 
     #[test]
-    fn resource_requests_handle_missing_and_invalid_values() {
+    fn resource_requests_convert_values() {
         for (resources, cpu, memory) in [
             (json!(null), None, None),
             (json!({}), None, None),
             (json!({"limits": {"cpu": "1", "memory": "1Gi"}}), None, None),
             (json!({"requests": {"cpu": "250m"}}), Some(250), None),
+            (
+                json!({"requests": {"cpu": "1.5", "memory": "1.5Gi"}}),
+                Some(1500),
+                Some(1_610_612_736),
+            ),
+            (
+                json!({"requests": {"cpu": "100u", "memory": "400m"}}),
+                Some(1),
+                Some(1),
+            ),
+            (
+                json!({"requests": {"cpu": "-1", "memory": "-1Mi"}}),
+                None,
+                None,
+            ),
             (json!({"requests": {"memory": "1M"}}), None, Some(1_000_000)),
             (
                 json!({"requests": {"cpu": "0", "memory": "0"}}),
@@ -757,7 +777,7 @@ mod tests {
                 Some(1_048_576),
             ),
             (
-                json!({"requests": {"cpu": "1", "memory": "8Ei"}}),
+                json!({"requests": {"cpu": "1", "memory": "1e19"}}),
                 Some(1000),
                 None,
             ),
