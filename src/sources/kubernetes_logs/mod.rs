@@ -380,7 +380,7 @@ impl SourceConfig for Config {
     )]
     fn outputs(&self, global_log_namespace: LogNamespace) -> Vec<SourceOutput> {
         let log_namespace = global_log_namespace.merge(self.log_namespace);
-        let mut schema_definition = BytesDeserializerConfig
+        let schema_definition = BytesDeserializerConfig
             .schema_definition(log_namespace)
             .with_source_metadata(
                 Self::NAME,
@@ -424,31 +424,31 @@ impl SourceConfig for Config {
                 &owned_value_path!("container_name"),
                 Kind::bytes().or_undefined(),
                 None,
-            );
-
-        for (field_name, field) in [
-            (
-                "container_cpu_request_millicores",
-                &self.pod_annotation_fields.container_cpu_request_millicores,
-            ),
-            (
-                "container_memory_request_bytes",
-                &self.pod_annotation_fields.container_memory_request_bytes,
-            ),
-        ] {
-            schema_definition = schema_definition.with_source_metadata(
+            )
+            .with_source_metadata(
                 Self::NAME,
-                field
+                self.pod_annotation_fields
+                    .container_cpu_request_millicores
                     .path
-                    .as_ref()
-                    .map(|path| LegacyKey::Overwrite(path.path.clone())),
-                &owned_value_path!(field_name),
+                    .clone()
+                    .map(|k| k.path)
+                    .map(LegacyKey::Overwrite),
+                &owned_value_path!("container_cpu_request_millicores"),
                 Kind::integer().or_undefined(),
                 None,
-            );
-        }
-
-        let schema_definition = schema_definition
+            )
+            .with_source_metadata(
+                Self::NAME,
+                self.pod_annotation_fields
+                    .container_memory_request_bytes
+                    .path
+                    .clone()
+                    .map(|k| k.path)
+                    .map(LegacyKey::Overwrite),
+                &owned_value_path!("container_memory_request_bytes"),
+                Kind::integer().or_undefined(),
+                None,
+            )
             .with_source_metadata(
                 Self::NAME,
                 self.namespace_annotation_fields
