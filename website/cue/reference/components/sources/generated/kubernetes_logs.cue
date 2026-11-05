@@ -312,10 +312,9 @@ generated: components: sources: kubernetes_logs: configuration: {
 				description: """
 					Event field for the logging container's CPU request, in millicores.
 
-					Disabled by default. Set a nonempty path to include this field.
-					In the legacy log namespace, a nonempty path specifies the output event field.
-					In the Vector log namespace, a nonempty path enables the fixed
-					`%kubernetes_logs.container_cpu_request_millicores` metadata field without renaming it.
+					Disabled by default in the legacy log namespace. Set a nonempty path to include this field.
+					The Vector log namespace always uses `%kubernetes_logs.container_cpu_request_millicores`,
+					regardless of this setting.
 
 					Fractional millicores are rounded up. Omitted if the request is missing or cannot be
 					represented as a non-negative 64-bit integer.
@@ -366,10 +365,9 @@ generated: components: sources: kubernetes_logs: configuration: {
 				description: """
 					Event field for the logging container's memory request, in bytes.
 
-					Disabled by default. Set a nonempty path to include this field.
-					In the legacy log namespace, a nonempty path specifies the output event field.
-					In the Vector log namespace, a nonempty path enables the fixed
-					`%kubernetes_logs.container_memory_request_bytes` metadata field without renaming it.
+					Disabled by default in the legacy log namespace. Set a nonempty path to include this field.
+					The Vector log namespace always uses `%kubernetes_logs.container_memory_request_bytes`,
+					regardless of this setting.
 
 					Fractional bytes are rounded up. Omitted if the request is missing or cannot be
 					represented as a non-negative 64-bit integer.

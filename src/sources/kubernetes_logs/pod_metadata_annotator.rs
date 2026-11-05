@@ -111,10 +111,9 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's CPU request, in millicores.
     ///
-    /// Disabled by default. Set a nonempty path to include this field.
-    /// In the legacy log namespace, a nonempty path specifies the output event field.
-    /// In the Vector log namespace, a nonempty path enables the fixed
-    /// `%kubernetes_logs.container_cpu_request_millicores` metadata field without renaming it.
+    /// Disabled by default in the legacy log namespace. Set a nonempty path to include this field.
+    /// The Vector log namespace always uses `%kubernetes_logs.container_cpu_request_millicores`,
+    /// regardless of this setting.
     ///
     /// Fractional millicores are rounded up. Omitted if the request is missing or cannot be
     /// represented as a non-negative 64-bit integer.
@@ -125,10 +124,9 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's memory request, in bytes.
     ///
-    /// Disabled by default. Set a nonempty path to include this field.
-    /// In the legacy log namespace, a nonempty path specifies the output event field.
-    /// In the Vector log namespace, a nonempty path enables the fixed
-    /// `%kubernetes_logs.container_memory_request_bytes` metadata field without renaming it.
+    /// Disabled by default in the legacy log namespace. Set a nonempty path to include this field.
+    /// The Vector log namespace always uses `%kubernetes_logs.container_memory_request_bytes`,
+    /// regardless of this setting.
     ///
     /// Fractional bytes are rounded up. Omitted if the request is missing or cannot be
     /// represented as a non-negative 64-bit integer.
@@ -575,9 +573,13 @@ fn annotate_from_container(
                 &fields_spec.container_memory_request_bytes,
             ),
         ] {
-            let Some(path) = field.path.as_ref() else {
+            let legacy_key = field
+                .path
+                .as_ref()
+                .map(|path| LegacyKey::Overwrite(&path.path));
+            if log_namespace == LogNamespace::Legacy && legacy_key.is_none() {
                 continue;
-            };
+            }
             if let Some(value) = requests
                 .get(resource)
                 .and_then(|quantity| ParsedQuantity::try_from(quantity).ok())
@@ -589,7 +591,7 @@ fn annotate_from_container(
                 log_namespace.insert_source_metadata(
                     Config::NAME,
                     log,
-                    Some(LegacyKey::Overwrite(&path.path)),
+                    legacy_key,
                     path!(field_name),
                     value,
                 );
@@ -769,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_request_fields_are_independently_opt_in() {
+    fn resource_request_fields_follow_log_namespace() {
         let pod = pod_with_resource_requests();
         let container = &pod.spec.as_ref().unwrap().containers[0];
         for (name, cpu_field, memory_field) in [
@@ -791,7 +793,7 @@ mod tests {
                 let mut log = LogEvent::default();
                 annotate_from_container(&mut log, &fields, container, namespace);
                 let mut expected = LogEvent::default();
-                if cpu_field == Some("custom.cpu") {
+                if namespace == LogNamespace::Vector || cpu_field == Some("custom.cpu") {
                     let path = match namespace {
                         LogNamespace::Legacy => {
                             OwnedTargetPath::event(owned_value_path!("custom", "cpu"))
@@ -802,7 +804,7 @@ mod tests {
                     };
                     expected.insert(&path, 500);
                 }
-                if memory_field == Some("custom.memory") {
+                if namespace == LogNamespace::Vector || memory_field == Some("custom.memory") {
                     let path = match namespace {
                         LogNamespace::Legacy => {
                             OwnedTargetPath::event(owned_value_path!("custom", "memory"))

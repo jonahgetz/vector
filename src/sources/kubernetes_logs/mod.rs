@@ -436,15 +436,16 @@ impl SourceConfig for Config {
                 &self.pod_annotation_fields.container_memory_request_bytes,
             ),
         ] {
-            if let Some(path) = &field.path {
-                schema_definition = schema_definition.with_source_metadata(
-                    Self::NAME,
-                    Some(LegacyKey::Overwrite(path.path.clone())),
-                    &owned_value_path!(field_name),
-                    Kind::integer().or_undefined(),
-                    None,
-                );
-            }
+            schema_definition = schema_definition.with_source_metadata(
+                Self::NAME,
+                field
+                    .path
+                    .as_ref()
+                    .map(|path| LegacyKey::Overwrite(path.path.clone())),
+                &owned_value_path!(field_name),
+                Kind::integer().or_undefined(),
+                None,
+            );
         }
 
         let schema_definition = schema_definition
@@ -1348,7 +1349,7 @@ mod tests {
     use crate::config::SourceConfig;
 
     #[test]
-    fn resource_request_schema_fields_are_independently_opt_in() {
+    fn resource_request_schema_fields_follow_log_namespace() {
         for (name, cpu_field, memory_field) in [
             ("omitted", None, None),
             ("both empty", Some(""), Some("")),
@@ -1390,7 +1391,7 @@ mod tests {
                         owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
                     ),
                 ] {
-                    if enabled {
+                    if namespace == LogNamespace::Vector || enabled {
                         expected = match namespace {
                             LogNamespace::Legacy => expected.with_event_field(
                                 &legacy_path,
@@ -1679,6 +1680,16 @@ mod tests {
                     .with_metadata_field(
                         &owned_value_path!("kubernetes_logs", "container_name"),
                         Kind::bytes().or_undefined(),
+                        None
+                    )
+                    .with_metadata_field(
+                        &owned_value_path!("kubernetes_logs", "container_cpu_request_millicores"),
+                        Kind::integer().or_undefined(),
+                        None
+                    )
+                    .with_metadata_field(
+                        &owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
+                        Kind::integer().or_undefined(),
                         None
                     )
                     .with_metadata_field(
