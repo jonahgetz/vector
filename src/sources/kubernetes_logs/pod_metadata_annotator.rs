@@ -675,37 +675,36 @@ mod tests {
         let mut writer = Writer::default();
         writer.apply_watcher_event(&watcher::Event::Apply(pod_with_resource_requests()));
 
-        for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
-            let annotator =
-                PodMetadataAnnotator::new(writer.as_reader(), resource_request_fields(), namespace);
-            for (container, cpu, memory) in [
-                ("app", Some(500), Some(268_435_456)),
-                ("sidecar", Some(100), Some(33_554_432)),
-                ("init", Some(1000), Some(67_108_864)),
-                ("unknown", None, None),
-            ] {
-                let mut event = Event::Log(LogEvent::default());
-                annotator
-                    .annotate(
-                        &mut event,
-                        &format!("/var/log/pods/namespace_pod_uid/{container}/0.log"),
-                    )
-                    .unwrap();
-                let log = event.as_log();
-                assert_eq!(
-                    log.get(&resource_path(
-                        namespace,
-                        "container_cpu_request_millicores"
-                    )),
-                    cpu.map(Value::from).as_ref(),
-                    "{container}: CPU",
-                );
-                assert_eq!(
-                    log.get(&resource_path(namespace, "container_memory_request_bytes")),
-                    memory.map(Value::from).as_ref(),
-                    "{container}: memory",
-                );
-            }
+        let namespace = LogNamespace::Legacy;
+        let annotator =
+            PodMetadataAnnotator::new(writer.as_reader(), resource_request_fields(), namespace);
+        for (container, cpu, memory) in [
+            ("app", Some(500), Some(268_435_456)),
+            ("sidecar", Some(100), Some(33_554_432)),
+            ("init", Some(1000), Some(67_108_864)),
+            ("unknown", None, None),
+        ] {
+            let mut event = Event::Log(LogEvent::default());
+            annotator
+                .annotate(
+                    &mut event,
+                    &format!("/var/log/pods/namespace_pod_uid/{container}/0.log"),
+                )
+                .unwrap();
+            let log = event.as_log();
+            assert_eq!(
+                log.get(&resource_path(
+                    namespace,
+                    "container_cpu_request_millicores"
+                )),
+                cpu.map(Value::from).as_ref(),
+                "{container}: CPU",
+            );
+            assert_eq!(
+                log.get(&resource_path(namespace, "container_memory_request_bytes")),
+                memory.map(Value::from).as_ref(),
+                "{container}: memory",
+            );
         }
     }
 

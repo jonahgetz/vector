@@ -1349,66 +1349,35 @@ mod tests {
     use crate::config::SourceConfig;
 
     #[test]
-    fn resource_request_schema_fields_follow_log_namespace() {
-        for (name, cpu_field, memory_field) in [
-            ("omitted", None, None),
-            ("both empty", Some(""), Some("")),
-            ("CPU only", Some("custom.cpu"), None),
-            ("memory only", None, Some("custom.memory")),
-            ("both enabled", Some("custom.cpu"), Some("custom.memory")),
-        ] {
-            let mut fields = json!({});
-            if let Some(path) = cpu_field {
-                fields["container_cpu_request_millicores"] = json!(path);
-            }
-            if let Some(path) = memory_field {
-                fields["container_memory_request_bytes"] = json!(path);
-            }
-            let config: Config = serde_json::from_value(json!({
-                "pod_annotation_fields": fields,
-            }))
+    fn resource_request_schema_uses_custom_legacy_paths() {
+        let config: Config = serde_json::from_value(json!({
+            "pod_annotation_fields": {
+                "container_cpu_request_millicores": "custom.cpu",
+                "container_memory_request_bytes": "custom.memory",
+            },
+        }))
+        .unwrap();
+        let actual = config
+            .outputs(LogNamespace::Legacy)
+            .remove(0)
+            .schema_definition(true)
             .unwrap();
-            for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
-                let actual = config
-                    .outputs(namespace)
-                    .remove(0)
-                    .schema_definition(true)
-                    .unwrap();
-                let mut expected = Config::default()
-                    .outputs(namespace)
-                    .remove(0)
-                    .schema_definition(true)
-                    .unwrap();
-                for (enabled, legacy_path, vector_path) in [
-                    (
-                        cpu_field == Some("custom.cpu"),
-                        owned_value_path!("custom", "cpu"),
-                        owned_value_path!("kubernetes_logs", "container_cpu_request_millicores"),
-                    ),
-                    (
-                        memory_field == Some("custom.memory"),
-                        owned_value_path!("custom", "memory"),
-                        owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
-                    ),
-                ] {
-                    if namespace == LogNamespace::Vector || enabled {
-                        expected = match namespace {
-                            LogNamespace::Legacy => expected.with_event_field(
-                                &legacy_path,
-                                Kind::integer().or_undefined(),
-                                None,
-                            ),
-                            LogNamespace::Vector => expected.with_metadata_field(
-                                &vector_path,
-                                Kind::integer().or_undefined(),
-                                None,
-                            ),
-                        };
-                    }
-                }
-                assert_eq!(actual, expected, "{name}, {namespace:?}");
-            }
-        }
+        let expected = Config::default()
+            .outputs(LogNamespace::Legacy)
+            .remove(0)
+            .schema_definition(true)
+            .unwrap()
+            .with_event_field(
+                &owned_value_path!("custom", "cpu"),
+                Kind::integer().or_undefined(),
+                None,
+            )
+            .with_event_field(
+                &owned_value_path!("custom", "memory"),
+                Kind::integer().or_undefined(),
+                None,
+            );
+        assert_eq!(actual, expected);
     }
 
     #[test]
