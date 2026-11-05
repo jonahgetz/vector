@@ -6,7 +6,6 @@ use vector_lib::{
 #[derive(Debug, NamedInternalEvent)]
 pub(crate) struct ThrottleEventDiscarded {
     pub key: String,
-    pub metric_key: Option<String>,
     pub emit_events_discarded_per_key: bool,
     pub include_group_tag: bool,
 }
@@ -16,13 +15,12 @@ impl InternalEvent for ThrottleEventDiscarded {
         let message = "Rate limit exceeded.";
 
         debug!(message, key = %self.key);
-        let metric_key = self.metric_key.unwrap_or(self.key);
         if self.emit_events_discarded_per_key {
             // Deprecated.
-            counter!(CounterName::EventsDiscardedTotal, "key" => metric_key.clone()).increment(1);
+            counter!(CounterName::EventsDiscardedTotal, "key" => self.key.clone()).increment(1);
         }
 
-        let group = self.include_group_tag.then_some(metric_key);
+        let group = self.include_group_tag.then_some(self.key);
         ComponentEventsDropped::<INTENTIONAL> {
             count: 1,
             reason: message,
@@ -64,7 +62,6 @@ mod tests {
         for key in ["group-a", "group-b", "None"] {
             ThrottleEventDiscarded {
                 key: key.to_string(),
-                metric_key: None,
                 emit_events_discarded_per_key: false,
                 include_group_tag: true,
             }
@@ -85,7 +82,6 @@ mod tests {
         vector_lib::metrics::init_test();
         ThrottleEventDiscarded {
             key: "group-a".to_string(),
-            metric_key: None,
             emit_events_discarded_per_key: false,
             include_group_tag: false,
         }

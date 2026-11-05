@@ -30,26 +30,14 @@ generated: components: transforms: throttle: configuration: {
 					Whether or not to include the `group` tag on the `component_discarded_events_total`
 					internal metric.
 
-					When enabled, adds a `group` tag using `internal_metrics.key_field`, or the transform's
-					`key_field` when no override is set. Missing values or failed rendering use `None`.
+					When enabled, adds a `group` tag containing the rendered `key_field` value.
+					If the `key_field` value is missing or can't be rendered, the tag value is `None`.
 
 					Note that this defaults to false because the `group` tag has potentially unbounded
 					cardinality. Only set this to true if you know that the number of unique groups is bounded.
 					"""
 				required: false
 				type: bool: default: false
-			}
-			key_field: {
-				description: """
-					Overrides the key used for drop-metric tags without changing rate-limit buckets.
-
-					Defaults to the transform's `key_field`. Failed rendering uses `"None"`.
-					"""
-				required: false
-				type: string: {
-					examples: ["{{ service }}"]
-					syntax: "template"
-				}
 			}
 		}
 	}
