@@ -111,8 +111,13 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's CPU request, in millicores.
     ///
+    /// Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+    /// In the legacy log namespace, a nonempty path specifies the output event field.
+    /// In the Vector log namespace, a nonempty path enables the fixed
+    /// `%kubernetes_logs.container_cpu_request_millicores` metadata field without renaming it.
+    ///
     /// Fractional millicores are rounded up. Omitted if the request is missing or cannot be
-    /// represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+    /// represented as a non-negative 64-bit integer.
     #[configurable(metadata(docs::examples = ".k8s.container_cpu_request_millicores"))]
     #[configurable(metadata(docs::examples = "k8s.container_cpu_request_millicores"))]
     #[configurable(metadata(docs::examples = ""))]
@@ -120,8 +125,13 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's memory request, in bytes.
     ///
+    /// Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+    /// In the legacy log namespace, a nonempty path specifies the output event field.
+    /// In the Vector log namespace, a nonempty path enables the fixed
+    /// `%kubernetes_logs.container_memory_request_bytes` metadata field without renaming it.
+    ///
     /// Fractional bytes are rounded up. Omitted if the request is missing or cannot be
-    /// represented as a non-negative 64-bit integer. Set to `""` to suppress this key.
+    /// represented as a non-negative 64-bit integer.
     #[configurable(metadata(docs::examples = ".k8s.container_memory_request_bytes"))]
     #[configurable(metadata(docs::examples = "k8s.container_memory_request_bytes"))]
     #[configurable(metadata(docs::examples = ""))]
@@ -178,16 +188,8 @@ impl Default for FieldsSpec {
             .into(),
             container_id: OwnedTargetPath::event(owned_value_path!("kubernetes", "container_id"))
                 .into(),
-            container_cpu_request_millicores: OwnedTargetPath::event(owned_value_path!(
-                "kubernetes",
-                "container_cpu_request_millicores"
-            ))
-            .into(),
-            container_memory_request_bytes: OwnedTargetPath::event(owned_value_path!(
-                "kubernetes",
-                "container_memory_request_bytes"
-            ))
-            .into(),
+            container_cpu_request_millicores: OptionalTargetPath::none(),
+            container_memory_request_bytes: OptionalTargetPath::none(),
             container_image: OwnedTargetPath::event(owned_value_path!(
                 "kubernetes",
                 "container_image"
@@ -572,19 +574,17 @@ fn annotate_from_container(
                 &fields_spec.container_memory_request_bytes,
             ),
         ] {
+            let Some(path) = field.path.as_ref() else {
+                continue;
+            };
             if let Some(value) = requests
                 .get(resource)
                 .and_then(|quantity| parse_quantity(&quantity.0, scale))
             {
-                let legacy_key = field
-                    .path
-                    .as_ref()
-                    .map(|key| &key.path)
-                    .map(LegacyKey::Overwrite);
                 log_namespace.insert_source_metadata(
                     Config::NAME,
                     log,
-                    legacy_key,
+                    Some(LegacyKey::Overwrite(&path.path)),
                     path!(field_name),
                     value,
                 );
@@ -632,6 +632,14 @@ mod tests {
         }
     }
 
+    fn resource_request_fields() -> FieldsSpec {
+        serde_json::from_value(json!({
+            "container_cpu_request_millicores": "kubernetes.container_cpu_request_millicores",
+            "container_memory_request_bytes": "kubernetes.container_memory_request_bytes",
+        }))
+        .unwrap()
+    }
+
     fn pod_with_resource_requests() -> Pod {
         serde_json::from_value(json!({
             "metadata": {"name": "pod", "namespace": "namespace", "uid": "uid"},
@@ -662,7 +670,7 @@ mod tests {
 
         for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
             let annotator =
-                PodMetadataAnnotator::new(writer.as_reader(), FieldsSpec::default(), namespace);
+                PodMetadataAnnotator::new(writer.as_reader(), resource_request_fields(), namespace);
             for (container, cpu, memory) in [
                 ("app", Some(500), Some(268_435_456)),
                 ("sidecar", Some(100), Some(33_554_432)),
@@ -699,7 +707,7 @@ mod tests {
         let mut writer = Writer::default();
         let annotator = PodMetadataAnnotator::new(
             writer.as_reader(),
-            FieldsSpec::default(),
+            resource_request_fields(),
             LogNamespace::Legacy,
         );
         let file = "/var/log/pods/namespace_pod_uid/app/0.log";
@@ -761,7 +769,12 @@ mod tests {
             .unwrap();
             for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
                 let mut log = LogEvent::default();
-                annotate_from_container(&mut log, &FieldsSpec::default(), &container, namespace);
+                annotate_from_container(
+                    &mut log,
+                    &resource_request_fields(),
+                    &container,
+                    namespace,
+                );
                 assert_eq!(
                     log.get(&resource_path(
                         namespace,
@@ -778,43 +791,65 @@ mod tests {
     }
 
     #[test]
-    fn resource_request_fields_can_be_renamed_or_disabled() {
+    fn resource_request_fields_are_disabled_by_default() {
+        let fields = FieldsSpec::default();
+        assert!(fields.container_cpu_request_millicores.path.is_none());
+        assert!(fields.container_memory_request_bytes.path.is_none());
         let pod = pod_with_resource_requests();
         let container = &pod.spec.as_ref().unwrap().containers[0];
-        for (cpu_field, memory_field) in [("cpu", "memory"), ("", "memory"), ("cpu", ""), ("", "")]
-        {
-            let fields: FieldsSpec = serde_json::from_value(json!({
-                "container_cpu_request_millicores": cpu_field,
-                "container_memory_request_bytes": memory_field,
-            }))
-            .unwrap();
+        for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
             let mut log = LogEvent::default();
-            annotate_from_container(&mut log, &fields, container, LogNamespace::Legacy);
-            let mut expected = LogEvent::default();
-            if !cpu_field.is_empty() {
-                expected.insert(event_path!("cpu"), 500);
-            }
-            if !memory_field.is_empty() {
-                expected.insert(event_path!("memory"), 268_435_456);
-            }
-            assert_eq!(log, expected);
+            annotate_from_container(&mut log, &fields, container, namespace);
+            assert_eq!(log, LogEvent::default());
+        }
+    }
 
-            let mut log = LogEvent::default();
-            annotate_from_container(&mut log, &fields, container, LogNamespace::Vector);
-            assert_eq!(
-                log.get(metadata_path!(
-                    "kubernetes_logs",
-                    "container_cpu_request_millicores"
-                )),
-                Some(&Value::from(500)),
-            );
-            assert_eq!(
-                log.get(metadata_path!(
-                    "kubernetes_logs",
-                    "container_memory_request_bytes"
-                )),
-                Some(&Value::from(268_435_456)),
-            );
+    #[test]
+    fn resource_request_fields_are_independently_opt_in() {
+        let pod = pod_with_resource_requests();
+        let container = &pod.spec.as_ref().unwrap().containers[0];
+        for cpu_field in [None, Some(""), Some("custom.cpu")] {
+            for memory_field in [None, Some(""), Some("custom.memory")] {
+                let mut config = json!({});
+                if let Some(path) = cpu_field {
+                    config["container_cpu_request_millicores"] = json!(path);
+                }
+                if let Some(path) = memory_field {
+                    config["container_memory_request_bytes"] = json!(path);
+                }
+                let fields: FieldsSpec = serde_json::from_value(config).unwrap();
+                for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
+                    let mut log = LogEvent::default();
+                    annotate_from_container(&mut log, &fields, container, namespace);
+                    let mut expected = LogEvent::default();
+                    if cpu_field == Some("custom.cpu") {
+                        let path = match namespace {
+                            LogNamespace::Legacy => {
+                                OwnedTargetPath::event(owned_value_path!("custom", "cpu"))
+                            }
+                            LogNamespace::Vector => {
+                                resource_path(namespace, "container_cpu_request_millicores")
+                            }
+                        };
+                        expected.insert(&path, 500);
+                    }
+                    if memory_field == Some("custom.memory") {
+                        let path = match namespace {
+                            LogNamespace::Legacy => {
+                                OwnedTargetPath::event(owned_value_path!("custom", "memory"))
+                            }
+                            LogNamespace::Vector => {
+                                resource_path(namespace, "container_memory_request_bytes")
+                            }
+                        };
+                        expected.insert(&path, 268_435_456);
+                    }
+                    assert_eq!(
+                        log, expected,
+                        "{namespace:?}, CPU: {cpu_field:?}, memory: {memory_field:?}"
+                    );
+                }
+            }
         }
     }
 

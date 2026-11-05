@@ -381,7 +381,7 @@ impl SourceConfig for Config {
     )]
     fn outputs(&self, global_log_namespace: LogNamespace) -> Vec<SourceOutput> {
         let log_namespace = global_log_namespace.merge(self.log_namespace);
-        let schema_definition = BytesDeserializerConfig
+        let mut schema_definition = BytesDeserializerConfig
             .schema_definition(log_namespace)
             .with_source_metadata(
                 Self::NAME,
@@ -425,31 +425,30 @@ impl SourceConfig for Config {
                 &owned_value_path!("container_name"),
                 Kind::bytes().or_undefined(),
                 None,
-            )
-            .with_source_metadata(
-                Self::NAME,
-                self.pod_annotation_fields
-                    .container_cpu_request_millicores
-                    .path
-                    .clone()
-                    .map(|key| key.path)
-                    .map(LegacyKey::Overwrite),
-                &owned_value_path!("container_cpu_request_millicores"),
-                Kind::integer().or_undefined(),
-                None,
-            )
-            .with_source_metadata(
-                Self::NAME,
-                self.pod_annotation_fields
-                    .container_memory_request_bytes
-                    .path
-                    .clone()
-                    .map(|key| key.path)
-                    .map(LegacyKey::Overwrite),
-                &owned_value_path!("container_memory_request_bytes"),
-                Kind::integer().or_undefined(),
-                None,
-            )
+            );
+
+        for (field_name, field) in [
+            (
+                "container_cpu_request_millicores",
+                &self.pod_annotation_fields.container_cpu_request_millicores,
+            ),
+            (
+                "container_memory_request_bytes",
+                &self.pod_annotation_fields.container_memory_request_bytes,
+            ),
+        ] {
+            if let Some(path) = &field.path {
+                schema_definition = schema_definition.with_source_metadata(
+                    Self::NAME,
+                    Some(LegacyKey::Overwrite(path.path.clone())),
+                    &owned_value_path!(field_name),
+                    Kind::integer().or_undefined(),
+                    None,
+                );
+            }
+        }
+
+        let schema_definition = schema_definition
             .with_source_metadata(
                 Self::NAME,
                 self.namespace_annotation_fields
@@ -1336,6 +1335,7 @@ mod tests {
     use std::time::Duration;
 
     use indoc::indoc;
+    use serde_json::json;
     use similar_asserts::assert_eq;
     use vector_lib::{
         codecs::OversizedAction,
@@ -1347,6 +1347,71 @@ mod tests {
 
     use super::Config;
     use crate::config::SourceConfig;
+
+    #[test]
+    fn resource_request_schema_fields_are_independently_opt_in() {
+        for cpu_field in [None, Some(""), Some("custom.cpu")] {
+            for memory_field in [None, Some(""), Some("custom.memory")] {
+                let mut fields = json!({});
+                if let Some(path) = cpu_field {
+                    fields["container_cpu_request_millicores"] = json!(path);
+                }
+                if let Some(path) = memory_field {
+                    fields["container_memory_request_bytes"] = json!(path);
+                }
+                let config: Config = serde_json::from_value(json!({
+                    "pod_annotation_fields": fields,
+                }))
+                .unwrap();
+                for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
+                    let actual = config
+                        .outputs(namespace)
+                        .remove(0)
+                        .schema_definition(true)
+                        .unwrap();
+                    let mut expected = Config::default()
+                        .outputs(namespace)
+                        .remove(0)
+                        .schema_definition(true)
+                        .unwrap();
+                    for (enabled, legacy_path, vector_path) in [
+                        (
+                            cpu_field == Some("custom.cpu"),
+                            owned_value_path!("custom", "cpu"),
+                            owned_value_path!(
+                                "kubernetes_logs",
+                                "container_cpu_request_millicores"
+                            ),
+                        ),
+                        (
+                            memory_field == Some("custom.memory"),
+                            owned_value_path!("custom", "memory"),
+                            owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
+                        ),
+                    ] {
+                        if enabled {
+                            expected = match namespace {
+                                LogNamespace::Legacy => expected.with_event_field(
+                                    &legacy_path,
+                                    Kind::integer().or_undefined(),
+                                    None,
+                                ),
+                                LogNamespace::Vector => expected.with_metadata_field(
+                                    &vector_path,
+                                    Kind::integer().or_undefined(),
+                                    None,
+                                ),
+                            };
+                        }
+                    }
+                    assert_eq!(
+                        actual, expected,
+                        "{namespace:?}, CPU: {cpu_field:?}, memory: {memory_field:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn generate_config() {
@@ -1620,16 +1685,6 @@ mod tests {
                         None
                     )
                     .with_metadata_field(
-                        &owned_value_path!("kubernetes_logs", "container_cpu_request_millicores"),
-                        Kind::integer().or_undefined(),
-                        None
-                    )
-                    .with_metadata_field(
-                        &owned_value_path!("kubernetes_logs", "container_memory_request_bytes"),
-                        Kind::integer().or_undefined(),
-                        None
-                    )
-                    .with_metadata_field(
                         &owned_value_path!("kubernetes_logs", "namespace_labels"),
                         Kind::object(Collection::empty().with_unknown(Kind::bytes()))
                             .or_undefined(),
@@ -1762,16 +1817,6 @@ mod tests {
                 .with_event_field(
                     &owned_value_path!("kubernetes", "container_name"),
                     Kind::bytes().or_undefined(),
-                    None
-                )
-                .with_event_field(
-                    &owned_value_path!("kubernetes", "container_cpu_request_millicores"),
-                    Kind::integer().or_undefined(),
-                    None
-                )
-                .with_event_field(
-                    &owned_value_path!("kubernetes", "container_memory_request_bytes"),
-                    Kind::integer().or_undefined(),
                     None
                 )
                 .with_event_field(
