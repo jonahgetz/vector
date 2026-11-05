@@ -273,18 +273,6 @@ components: sources: kubernetes_logs: {
 					Vector will enrich data with Kubernetes context. A comprehensive
 					list of fields can be found in the
 					[`kubernetes_logs` source output docs](\(urls.vector_kubernetes_logs_source)#output-types).
-
-					Configure container CPU and memory request fields with `pod_annotation_fields`:
-
-					```yaml
-					pod_annotation_fields:
-					  container_cpu_request_millicores: kubernetes.container_cpu_request_millicores
-					  container_memory_request_bytes: kubernetes.container_memory_request_bytes
-					```
-
-					Requests come from the logging container, including init containers, in the
-					cached Pod metadata. Fractional millicores and bytes are rounded up. Missing
-					or unrepresentable requests are omitted; explicit zeroes are retained.
 					"""
 		}
 
