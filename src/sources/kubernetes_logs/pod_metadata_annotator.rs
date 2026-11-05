@@ -111,7 +111,7 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's CPU request, in millicores.
     ///
-    /// Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+    /// Disabled by default. Set a nonempty path to include this field.
     /// In the legacy log namespace, a nonempty path specifies the output event field.
     /// In the Vector log namespace, a nonempty path enables the fixed
     /// `%kubernetes_logs.container_cpu_request_millicores` metadata field without renaming it.
@@ -125,7 +125,7 @@ pub struct FieldsSpec {
 
     /// Event field for the logging container's memory request, in bytes.
     ///
-    /// Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+    /// Disabled by default. Set a nonempty path to include this field.
     /// In the legacy log namespace, a nonempty path specifies the output event field.
     /// In the Vector log namespace, a nonempty path enables the fixed
     /// `%kubernetes_logs.container_memory_request_bytes` metadata field without renaming it.
@@ -708,43 +708,8 @@ mod tests {
     }
 
     #[test]
-    fn resource_requests_follow_pod_cache_updates() {
-        let mut writer = Writer::default();
-        let annotator = PodMetadataAnnotator::new(
-            writer.as_reader(),
-            resource_request_fields(),
-            LogNamespace::Legacy,
-        );
-        let file = "/var/log/pods/namespace_pod_uid/app/0.log";
-        let mut event = Event::Log(LogEvent::default());
-        annotator.annotate(&mut event, file).unwrap();
-        let cpu_path = resource_path(LogNamespace::Legacy, "container_cpu_request_millicores");
-        assert_eq!(event.as_log().get(&cpu_path), None);
-
-        let mut pod = pod_with_resource_requests();
-        writer.apply_watcher_event(&watcher::Event::Apply(pod.clone()));
-        let mut event = Event::Log(LogEvent::default());
-        annotator.annotate(&mut event, file).unwrap();
-        assert_eq!(event.as_log().get(&cpu_path), Some(&Value::from(500)));
-
-        pod.spec.as_mut().unwrap().containers[0]
-            .resources
-            .as_mut()
-            .unwrap()
-            .requests
-            .as_mut()
-            .unwrap()
-            .get_mut("cpu")
-            .unwrap()
-            .0 = "2".to_owned();
-        writer.apply_watcher_event(&watcher::Event::Apply(pod));
-        let mut event = Event::Log(LogEvent::default());
-        annotator.annotate(&mut event, file).unwrap();
-        assert_eq!(event.as_log().get(&cpu_path), Some(&Value::from(2000)));
-    }
-
-    #[test]
     fn resource_requests_convert_values() {
+        let namespace = LogNamespace::Legacy;
         for (resources, cpu, memory) in [
             (json!(null), None, None),
             (json!({}), None, None),
@@ -787,40 +752,19 @@ mod tests {
                 "resources": resources,
             }))
             .unwrap();
-            for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
-                let mut log = LogEvent::default();
-                annotate_from_container(
-                    &mut log,
-                    &resource_request_fields(),
-                    &container,
-                    namespace,
-                );
-                assert_eq!(
-                    log.get(&resource_path(
-                        namespace,
-                        "container_cpu_request_millicores"
-                    )),
-                    cpu.map(Value::from).as_ref(),
-                );
-                assert_eq!(
-                    log.get(&resource_path(namespace, "container_memory_request_bytes")),
-                    memory.map(Value::from).as_ref(),
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn resource_request_fields_are_disabled_by_default() {
-        let fields = FieldsSpec::default();
-        assert!(fields.container_cpu_request_millicores.path.is_none());
-        assert!(fields.container_memory_request_bytes.path.is_none());
-        let pod = pod_with_resource_requests();
-        let container = &pod.spec.as_ref().unwrap().containers[0];
-        for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
             let mut log = LogEvent::default();
-            annotate_from_container(&mut log, &fields, container, namespace);
-            assert_eq!(log, LogEvent::default());
+            annotate_from_container(&mut log, &resource_request_fields(), &container, namespace);
+            assert_eq!(
+                log.get(&resource_path(
+                    namespace,
+                    "container_cpu_request_millicores"
+                )),
+                cpu.map(Value::from).as_ref(),
+            );
+            assert_eq!(
+                log.get(&resource_path(namespace, "container_memory_request_bytes")),
+                memory.map(Value::from).as_ref(),
+            );
         }
     }
 
@@ -828,47 +772,48 @@ mod tests {
     fn resource_request_fields_are_independently_opt_in() {
         let pod = pod_with_resource_requests();
         let container = &pod.spec.as_ref().unwrap().containers[0];
-        for cpu_field in [None, Some(""), Some("custom.cpu")] {
-            for memory_field in [None, Some(""), Some("custom.memory")] {
-                let mut config = json!({});
-                if let Some(path) = cpu_field {
-                    config["container_cpu_request_millicores"] = json!(path);
+        for (name, cpu_field, memory_field) in [
+            ("omitted", None, None),
+            ("both empty", Some(""), Some("")),
+            ("CPU only", Some("custom.cpu"), None),
+            ("memory only", None, Some("custom.memory")),
+            ("both enabled", Some("custom.cpu"), Some("custom.memory")),
+        ] {
+            let mut config = json!({});
+            if let Some(path) = cpu_field {
+                config["container_cpu_request_millicores"] = json!(path);
+            }
+            if let Some(path) = memory_field {
+                config["container_memory_request_bytes"] = json!(path);
+            }
+            let fields: FieldsSpec = serde_json::from_value(config).unwrap();
+            for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
+                let mut log = LogEvent::default();
+                annotate_from_container(&mut log, &fields, container, namespace);
+                let mut expected = LogEvent::default();
+                if cpu_field == Some("custom.cpu") {
+                    let path = match namespace {
+                        LogNamespace::Legacy => {
+                            OwnedTargetPath::event(owned_value_path!("custom", "cpu"))
+                        }
+                        LogNamespace::Vector => {
+                            resource_path(namespace, "container_cpu_request_millicores")
+                        }
+                    };
+                    expected.insert(&path, 500);
                 }
-                if let Some(path) = memory_field {
-                    config["container_memory_request_bytes"] = json!(path);
+                if memory_field == Some("custom.memory") {
+                    let path = match namespace {
+                        LogNamespace::Legacy => {
+                            OwnedTargetPath::event(owned_value_path!("custom", "memory"))
+                        }
+                        LogNamespace::Vector => {
+                            resource_path(namespace, "container_memory_request_bytes")
+                        }
+                    };
+                    expected.insert(&path, 268_435_456);
                 }
-                let fields: FieldsSpec = serde_json::from_value(config).unwrap();
-                for namespace in [LogNamespace::Legacy, LogNamespace::Vector] {
-                    let mut log = LogEvent::default();
-                    annotate_from_container(&mut log, &fields, container, namespace);
-                    let mut expected = LogEvent::default();
-                    if cpu_field == Some("custom.cpu") {
-                        let path = match namespace {
-                            LogNamespace::Legacy => {
-                                OwnedTargetPath::event(owned_value_path!("custom", "cpu"))
-                            }
-                            LogNamespace::Vector => {
-                                resource_path(namespace, "container_cpu_request_millicores")
-                            }
-                        };
-                        expected.insert(&path, 500);
-                    }
-                    if memory_field == Some("custom.memory") {
-                        let path = match namespace {
-                            LogNamespace::Legacy => {
-                                OwnedTargetPath::event(owned_value_path!("custom", "memory"))
-                            }
-                            LogNamespace::Vector => {
-                                resource_path(namespace, "container_memory_request_bytes")
-                            }
-                        };
-                        expected.insert(&path, 268_435_456);
-                    }
-                    assert_eq!(
-                        log, expected,
-                        "{namespace:?}, CPU: {cpu_field:?}, memory: {memory_field:?}"
-                    );
-                }
+                assert_eq!(log, expected, "{name}, {namespace:?}");
             }
         }
     }

@@ -312,7 +312,7 @@ generated: components: sources: kubernetes_logs: configuration: {
 				description: """
 					Event field for the logging container's CPU request, in millicores.
 
-					Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+					Disabled by default. Set a nonempty path to include this field.
 					In the legacy log namespace, a nonempty path specifies the output event field.
 					In the Vector log namespace, a nonempty path enables the fixed
 					`%kubernetes_logs.container_cpu_request_millicores` metadata field without renaming it.
@@ -366,7 +366,7 @@ generated: components: sources: kubernetes_logs: configuration: {
 				description: """
 					Event field for the logging container's memory request, in bytes.
 
-					Disabled by default. Omit this setting or set it to `""` to disable enrichment.
+					Disabled by default. Set a nonempty path to include this field.
 					In the legacy log namespace, a nonempty path specifies the output event field.
 					In the Vector log namespace, a nonempty path enables the fixed
 					`%kubernetes_logs.container_memory_request_bytes` metadata field without renaming it.
