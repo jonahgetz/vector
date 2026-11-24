@@ -1,0 +1,14 @@
+transforms:
+  my_transform_id:
+    type: fair_throttle
+    inputs:
+      - my-source-or-transform-id
+    group_by: "{{ service }}"
+    max_age_secs: 1.0
+    max_bytes_per_group: 262144
+    max_events_per_group: 16
+    max_groups: 128
+    measure_cpu_usage: false
+    rate_per_sec: 10000
+    weight: 1
+    weight_field: log_weight

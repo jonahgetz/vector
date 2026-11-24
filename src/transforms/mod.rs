@@ -13,6 +13,8 @@ pub mod aws_ec2_metadata;
 pub mod delay;
 #[cfg(feature = "transforms-exclusive_route")]
 mod exclusive_route;
+#[cfg(feature = "transforms-fair_throttle")]
+pub mod fair_throttle;
 #[cfg(feature = "transforms-filter")]
 pub mod filter;
 #[cfg(feature = "transforms-incremental_to_absolute")]

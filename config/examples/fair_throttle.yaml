@@ -1,0 +1,31 @@
+# Pipe JSON logs with service and log_weight fields into stdin.
+# When both services remain backlogged, weights 1 and 3 receive roughly 25% and 75%
+# of the shared rate. Missing or invalid weights fall back to 1.
+sources:
+  logs:
+    type: stdin
+    decoding:
+      codec: json
+
+transforms:
+  fair_logs:
+    type: fair_throttle
+    inputs: [logs]
+    rate_per_sec: 10000
+    burst: 10
+    group_by: "{{ service }}"
+    weight: 1
+    weight_field: log_weight
+    max_groups: 128
+    max_events_per_group: 16
+    max_bytes_per_group: 262144
+    max_age_secs: 1
+    internal_metrics:
+      include_group_tag: true
+
+sinks:
+  output:
+    type: console
+    inputs: [fair_logs]
+    encoding:
+      codec: json

@@ -54,6 +54,8 @@ mod encoding_transcode;
 mod eventstoredb_metrics;
 #[cfg(feature = "sources-exec")]
 mod exec;
+#[cfg(feature = "transforms-fair_throttle")]
+mod fair_throttle;
 #[cfg(any(
     feature = "sources-file",
     feature = "sources-kubernetes_logs",
@@ -212,6 +214,8 @@ pub(crate) use self::eventstoredb_metrics::*;
 pub(crate) use self::exec::*;
 #[cfg(any(feature = "transforms-log_to_metric", feature = "sinks-loki"))]
 pub use self::expansion::*;
+#[cfg(feature = "transforms-fair_throttle")]
+pub(crate) use self::fair_throttle::*;
 #[cfg(any(
     feature = "sources-file",
     feature = "sources-kubernetes_logs",

@@ -869,6 +869,7 @@ transforms-logs = [
   "transforms-remap",
   "transforms-route",
   "transforms-exclusive_route",
+  "transforms-fair_throttle",
   "transforms-sample",
   "transforms-throttle",
   "transforms-trace_to_log"
@@ -900,6 +901,7 @@ transforms-reduce = ["transforms-impl-reduce"]
 transforms-remap = []
 transforms-route = []
 transforms-exclusive_route = []
+transforms-fair_throttle = []
 transforms-sample = ["transforms-impl-sample"]
 transforms-tag_cardinality_limit = ["dep:bloomy", "dep:hashbrown"]
 transforms-throttle = ["dep:governor"]
